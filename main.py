@@ -84,7 +84,7 @@ def subtree_width(n, ch, nd, cache):
     nd[n]["width"] = 800
     nd[n]["height"] = 800
 
-    # If the sum of children is smaller than 800, we use 800 anyway
+    # If the sum of children widths is smaller than 800, we use 800 anyway
     if total < 800:
         total = 800
 
@@ -93,8 +93,8 @@ def subtree_width(n, ch, nd, cache):
 
 def layout_subtree(n, x, y, ch, nd, cache):
     """
-    Recursively set x,y for each node.
-    Also enforce 800x800 for every node in the subgraph.
+    Recursively set x,y for each node, forcing 800x800 for each node.
+    Preserves the left-to-right order based on the child's existing x value.
     """
     nd[n]["x"] = x
     nd[n]["y"] = y
@@ -105,23 +105,28 @@ def layout_subtree(n, x, y, ch, nd, cache):
     if not c:
         return
 
+    # Sort children by their current X so we preserve any manual ordering
+    c_sorted = sorted(c, key=lambda cid: nd[cid]["x"])
+
     gap_x = 200
     gap_y = 200
     nh = 800  # forced height
     ny = y + nh + gap_y
 
-    tw = sum(subtree_width(i, ch, nd, cache) for i in c) + (len(c) - 1) * gap_x
+    # total width among children
+    tw = sum(subtree_width(child_id, ch, nd, cache) for child_id in c_sorted) \
+         + (len(c_sorted) - 1) * gap_x
+
     left = x - tw / 2
-    for i in c:
-        w = subtree_width(i, ch, nd, cache)
+    for child_id in c_sorted:
+        w = subtree_width(child_id, ch, nd, cache)
         nx = left + w / 2
-        layout_subtree(i, nx, ny, ch, nd, cache)
+        layout_subtree(child_id, nx, ny, ch, nd, cache)
         left += w + gap_x
 
 def filter_invisible(d):
     """
-    Filter only nodes containing <mind-map-node-invisible></mind-map-node-invisible>
-    (Instead of checking for 'MMN', we check for this text.)
+    Filter only nodes containing <mind-map-node-invisible></mind-map-node-invisible>.
     """
     invisible_nodes = set()
     for n in d["nodes"]:
@@ -175,7 +180,8 @@ def add_node():
 def align():
     """
     Layout only nodes containing <mind-map-node-invisible></mind-map-node-invisible>.
-    Force them all to be 800x800 in the process.
+    Force them all to be 800x800 in the process,
+    but preserve left-to-right order based on current x-values.
     """
     p = e_path.get().strip()
     if not p:
@@ -191,6 +197,8 @@ def align():
 
     nds = node_dict(dd)
     cache = {}
+
+    # We layout only the first root (if multiple, you can loop).
     layout_subtree(r[0], 0, 0, ch, nds, cache)
 
     # Copy updated positions + forced size back to the main data
