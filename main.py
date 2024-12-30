@@ -61,46 +61,67 @@ def node_dict(d):
     return nd
 
 def subtree_width(n, ch, nd, cache):
+    """
+    Compute total width of a subtree. We use 800 as the base width now.
+    """
     if n in cache:
         return cache[n]
     c = ch[n]
     if not c:
-        w = nd[n].get("width", 600)
-        cache[n] = w
-        return w
+        # If no children, width = 800
+        nd[n]["width"] = 800
+        nd[n]["height"] = 800
+        cache[n] = 800
+        return 800
+
     gap = 200
     total = 0
     for x in c:
         total += subtree_width(x, ch, nd, cache)
     total += gap * (len(c) - 1)
-    w = nd[n].get("width", 600)
-    if total < w:
-        total = w
+
+    # A node’s own width is forced to 800
+    nd[n]["width"] = 800
+    nd[n]["height"] = 800
+
+    # If the sum of children is smaller than 800, we use 800 anyway
+    if total < 800:
+        total = 800
+
     cache[n] = total
     return total
 
 def layout_subtree(n, x, y, ch, nd, cache):
+    """
+    Recursively set x,y for each node.
+    Also enforce 800x800 for every node in the subgraph.
+    """
     nd[n]["x"] = x
     nd[n]["y"] = y
+    nd[n]["width"] = 800
+    nd[n]["height"] = 800
+
     c = ch[n]
     if not c:
         return
+
     gap_x = 200
     gap_y = 200
-    nh = nd[n].get("height", 600)
+    nh = 800  # forced height
     ny = y + nh + gap_y
-    tw = sum(subtree_width(i, ch, nd, cache) for i in c) + (len(c)-1)*gap_x
-    left = x - tw/2
+
+    tw = sum(subtree_width(i, ch, nd, cache) for i in c) + (len(c) - 1) * gap_x
+    left = x - tw / 2
     for i in c:
         w = subtree_width(i, ch, nd, cache)
-        nx = left + w/2
+        nx = left + w / 2
         layout_subtree(i, nx, ny, ch, nd, cache)
         left += w + gap_x
 
 def filter_invisible(d):
     """
-    Instead of checking for 'MMN', we check for 
-    <mind-map-node-invisible></mind-map-node-invisible>
+    Filter only nodes containing <mind-map-node-invisible></mind-map-node-invisible>
+    (Instead of checking for 'MMN', we check for this text.)
     """
     invisible_nodes = set()
     for n in d["nodes"]:
@@ -117,17 +138,19 @@ def filter_invisible(d):
     return {"nodes": nd, "edges": ed}
 
 def add_node():
+    """
+    Create a new node that ends with <mind-map-node-invisible></mind-map-node-invisible>,
+    and set default size to 800x800.
+    """
     p = e_path.get().strip()
     if not p:
         return
     d = load_data(p)
 
-    # Remove line breaks in the question
     q = e_q.get("1.0", "end").strip().replace("\n", "")
     a = e_a.get("1.0", "end")
     i = str(uuid.uuid4())[:16].replace("-", "")
 
-    # Instead of adding 'MMN', we now add <mind-map-node-invisible></mind-map-node-invisible>
     final_text = f'''<div style="color: white; font-weight: bold; background-color: black; padding: 10px;">
     {q}
 </div>
@@ -141,8 +164,8 @@ def add_node():
         "text": final_text,
         "x": 0,
         "y": 0,
-        "width": 600,
-        "height": 600
+        "width": 800,  # force new node to be 800x800
+        "height": 800
     })
 
     save_data(p, d)
@@ -151,7 +174,8 @@ def add_node():
 
 def align():
     """
-    Re-layout only the nodes containing <mind-map-node-invisible></mind-map-node-invisible>.
+    Layout only nodes containing <mind-map-node-invisible></mind-map-node-invisible>.
+    Force them all to be 800x800 in the process.
     """
     p = e_path.get().strip()
     if not p:
@@ -162,7 +186,6 @@ def align():
     ch = build_children_map(dd)
     r = find_roots(dd)
     if not r:
-        # If no root found, just save and return
         save_data(p, d)
         return
 
@@ -170,12 +193,14 @@ def align():
     cache = {}
     layout_subtree(r[0], 0, 0, ch, nds, cache)
 
-    # Copy updated positions back into the main data
+    # Copy updated positions + forced size back to the main data
     for nm in dd["nodes"]:
         for o in d["nodes"]:
             if nm["id"] == o["id"]:
                 o["x"] = nm["x"]
                 o["y"] = nm["y"]
+                o["width"] = nm["width"]
+                o["height"] = nm["height"]
                 break
 
     save_data(p, d)
@@ -238,9 +263,9 @@ def alt_f1_action():
     pressed_keys.discard('alt')
 
     time.sleep(0.1)
-    pyautogui.keyDown('ctrl')
-    pyautogui.press('c')
-    pyautogui.keyUp('ctrl')
+    pyautogui.hotkey('ctrl', 'c')
+    pyautogui.hotkey('ctrl', 'c')
+    pyautogui.hotkey('ctrl', 'c')
 
     time.sleep(0.3)
     text_copied = pyperclip.paste()
@@ -255,7 +280,6 @@ def alt_f2_action():
     text_copied = pyperclip.paste()
     root.after(0, lambda: e_a.insert("1.0", text_copied))
 
-from pynput import keyboard
 listener = keyboard.Listener(on_press=on_press, on_release=on_release)
 listener.start()
 
