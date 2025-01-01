@@ -9,6 +9,10 @@ from pynput import keyboard
 root = tk.Tk()
 root.title("MindMap App")
 
+##############################################################################
+# Data helpers
+##############################################################################
+
 def load_data(p):
     try:
         with open(p, "r", encoding="utf-8") as f:
@@ -60,58 +64,98 @@ def node_dict(d):
         nd[n["id"]] = n
     return nd
 
+##############################################################################
+# Layout logic
+##############################################################################
+
 def subtree_width(n, ch, nd, cache):
     """
-    Compute total width of a subtree. We use 800 as the base width now.
+    Compute total width of a subtree.
+    - If it's a normal invisible tag: force 800×800.
+    - If it's the NO-RESIZE tag: do NOT force 800×800. Use whatever width/height is set.
     """
     if n in cache:
         return cache[n]
-    c = ch[n]
-    if not c:
-        # If no children, width = 800
-        nd[n]["width"] = 800
-        nd[n]["height"] = 800
-        cache[n] = 800
-        return 800
 
+    c = ch[n]
+    txt = nd[n]["text"]
+    is_no_resize = "<mind-map-node-invisible-no-resize></mind-map-node-invisible-no-resize>" in txt
+
+    base_width = 800
+    base_height = 800
+
+    # If no children, just handle width/height based on the tag
+    if not c:
+        if is_no_resize:
+            w = nd[n].get("width", 300)  # default smaller if missing
+            h = nd[n].get("height", 300)
+            nd[n]["width"] = w
+            nd[n]["height"] = h
+            cache[n] = w
+            return w
+        else:
+            nd[n]["width"] = base_width
+            nd[n]["height"] = base_height
+            cache[n] = base_width
+            return base_width
+
+    # If there are children
     gap = 200
     total = 0
     for x in c:
         total += subtree_width(x, ch, nd, cache)
     total += gap * (len(c) - 1)
 
-    # A node’s own width is forced to 800
-    nd[n]["width"] = 800
-    nd[n]["height"] = 800
-
-    # If the sum of children widths is smaller than 800, we use 800 anyway
-    if total < 800:
-        total = 800
+    if is_no_resize:
+        w = nd[n].get("width", 300)
+        h = nd[n].get("height", 300)
+        nd[n]["width"] = w
+        nd[n]["height"] = h
+        # If the sum of children widths is smaller than this node's width, make total = that width
+        if total < w:
+            total = w
+    else:
+        # forced to 800 if it's the regular invisible tag
+        nd[n]["width"] = base_width
+        nd[n]["height"] = base_height
+        if total < base_width:
+            total = base_width
 
     cache[n] = total
     return total
 
 def layout_subtree(n, x, y, ch, nd, cache):
     """
-    Recursively set x,y for each node, forcing 800x800 for each node.
-    Preserves the left-to-right order based on the child's existing x value.
+    Recursively position each node.
+    - Normal invisible tag => forced 800×800
+    - NO-RESIZE tag => keep existing width/height
     """
+    txt = nd[n]["text"]
+    is_no_resize = "<mind-map-node-invisible-no-resize></mind-map-node-invisible-no-resize>" in txt
+
+    if is_no_resize:
+        w = nd[n].get("width", 300)
+        h = nd[n].get("height", 300)
+        nd[n]["width"] = w
+        nd[n]["height"] = h
+    else:
+        w = 800
+        h = 800
+        nd[n]["width"] = w
+        nd[n]["height"] = h
+
     nd[n]["x"] = x
     nd[n]["y"] = y
-    nd[n]["width"] = 800
-    nd[n]["height"] = 800
 
     c = ch[n]
     if not c:
         return
 
-    # Sort children by their current X so we preserve any manual ordering
     c_sorted = sorted(c, key=lambda cid: nd[cid]["x"])
 
     gap_x = 200
     gap_y = 200
-    nh = 800  # forced height
-    ny = y + nh + gap_y
+    ny = y + h + gap_y
 
     # total width among children
     tw = sum(subtree_width(child_id, ch, nd, cache) for child_id in c_sorted) \
@@ -119,18 +163,27 @@ def layout_subtree(n, x, y, ch, nd, cache):
 
     left = x - tw / 2
     for child_id in c_sorted:
-        w = subtree_width(child_id, ch, nd, cache)
-        nx = left + w / 2
+        w_c = subtree_width(child_id, ch, nd, cache)
+        nx = left + w_c / 2
         layout_subtree(child_id, nx, ny, ch, nd, cache)
-        left += w + gap_x
+        left += w_c + gap_x
+
+##############################################################################
+# Filtering logic
+##############################################################################
 
 def filter_invisible(d):
     """
-    Filter only nodes containing <mind-map-node-invisible></mind-map-node-invisible>.
+    Filter only nodes containing EITHER:
+      <mind-map-node-invisible></mind-map-node-invisible>
+    OR
+      <mind-map-node-invisible-no-resize></mind-map-node-invisible-no-resize>
     """
     invisible_nodes = set()
     for n in d["nodes"]:
-        if "<mind-map-node-invisible></mind-map-node-invisible>" in n.get("text",""):
+        txt = n.get("text","")
+        if "<mind-map-node-invisible></mind-map-node-invisible>" in txt \
+           or "<mind-map-node-invisible-no-resize></mind-map-node-invisible-no-resize>" in txt:
             invisible_nodes.add(n["id"])
     nd = []
     ed = []
@@ -142,10 +195,14 @@ def filter_invisible(d):
             ed.append(e)
     return {"nodes": nd, "edges": ed}
 
+##############################################################################
+# Add node logic
+##############################################################################
+
 def add_node():
     """
     Create a new node that ends with <mind-map-node-invisible></mind-map-node-invisible>,
-    and set default size to 800x800.
+    forced default size 800x800.
     """
     p = e_path.get().strip()
     if not p:
@@ -169,8 +226,44 @@ def add_node():
         "text": final_text,
         "x": 0,
         "y": 0,
-        "width": 800,  # force new node to be 800x800
+        "width": 800,
         "height": 800
+    })
+
+    save_data(p, d)
+    e_q.delete("1.0", "end")
+    e_a.delete("1.0", "end")
+
+def add_node_no_resize():
+    """
+    Create a new node that ends with <mind-map-node-invisible-no-resize></mind-map-node-invisible-no-resize>,
+    do NOT force 800x800 (use smaller default, or let user override later).
+    """
+    p = e_path.get().strip()
+    if not p:
+        return
+    d = load_data(p)
+
+    q = e_q.get("1.0", "end").strip().replace("\n", "")
+    a = e_a.get("1.0", "end")
+    i = str(uuid.uuid4())[:16].replace("-", "")
+
+    final_text = f'''<div style="color: white; font-weight: bold; background-color: black; padding: 10px;">
+    {q}
+</div>
+
+---
+{a}<mind-map-node-invisible-no-resize></mind-map-node-invisible-no-resize>'''
+
+    d["nodes"].append({
+        "id": i,
+        "type": "text",
+        "text": final_text,
+        "x": 0,
+        "y": 0,
+        # Let’s start with something smaller like 300x300, user can resize later.
+        "width": 300,
+        "height": 300
     })
 
     save_data(p, d)
@@ -179,9 +272,9 @@ def add_node():
 
 def align():
     """
-    Layout only nodes containing <mind-map-node-invisible></mind-map-node-invisible>.
-    Force them all to be 800x800 in the process,
-    but preserve left-to-right order based on current x-values.
+    Layout only nodes containing the invisible or no-resize tags.
+    - Normal <mind-map-node-invisible> => forced 800x800
+    - <mind-map-node-invisible-no-resize> => keep custom size
     """
     p = e_path.get().strip()
     if not p:
@@ -198,10 +291,10 @@ def align():
     nds = node_dict(dd)
     cache = {}
 
-    # We layout only the first root (if multiple, you can loop).
+    # Layout from the first root (if multiple, you can loop)
     layout_subtree(r[0], 0, 0, ch, nds, cache)
 
-    # Copy updated positions + forced size back to the main data
+    # Copy updated positions + updated sizes back to the main data
     for nm in dd["nodes"]:
         for o in d["nodes"]:
             if nm["id"] == o["id"]:
@@ -230,6 +323,8 @@ e_path.grid(row=2, column=1)
 
 tk.Button(root, text="Add", command=add_node).grid(row=3, column=0)
 tk.Button(root, text="Align", command=align).grid(row=3, column=1)
+# New button for adding the no-resize tag
+tk.Button(root, text="Add No Resize", command=add_node_no_resize).grid(row=3, column=2)
 
 ##############################################################################
 # Global hotkey logic with pynput
